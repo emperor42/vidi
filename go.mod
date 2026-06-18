@@ -1,3 +1,3 @@
-module github.com/Emperor42/vidi
+module vidi
 
 go 1.21

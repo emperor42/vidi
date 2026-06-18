@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vidi - Visual Template Generator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+<h1>vidi</h1>
+<p>Visual HTML Template Generator</p>
+<a href="https://www.azzurro.tech" class="back">Go to Azzurro Technology</a>
+</header>
+<main>
+<div class="workspace">
+<section class="toolbox">
+<h2>Tags</h2>
+<div class="tags" id="tag-list">
+<button class="tag" data-tag="div">div</button>
+<button class="tag" data-tag="p">p</button>
+<button class="tag" data-tag="h1">h1</button>
+<button class="tag" data-tag="h2">h2</button>
+<button class="tag" data-tag="h3">h3</button>
+<button class="tag" data-tag="span">span</button>
+<button class="tag" data-tag="a">a</button>
+<button class="tag" data-tag="img">img</button>
+<button class="tag" data-tag="ul">ul</button>
+<button class="tag" data-tag="li">li</button>
+<button class="tag" data-tag="table">table</button>
+<button class="tag" data-tag="tr">tr</button>
+<button class="tag" data-tag="td">td</button>
+<button class="tag" data-tag="th">th</button>
+<button class="tag" data-tag="form">form</button>
+<button class="tag" data-tag="input">input</button>
+<button class="tag" data-tag="button">button</button>
+<button class="tag" data-tag="label">label</button>
+<button class="tag" data-tag="textarea">textarea</button>
+<button class="tag" data-tag="select">select</button>
+<button class="tag" data-tag="section">section</button>
+<button class="tag" data-tag="article">article</button>
+<button class="tag" data-tag="header">header</button>
+<button class="tag" data-tag="footer">footer</button>
+<button class="tag" data-tag="nav">nav</button>
+<button class="tag" data-tag="main">main</button>
+</div>
+<div class="properties">
+<h3>Properties</h3>
+<p>Click an element in the preview to edit its properties.</p>
+</div>
+</section>
+<section class="canvas">
+<div class="canvas-header">
+<input type="text" id="template-name" placeholder="Template name" class="name-input">
+<button id="save-btn" class="button">Save</button>
+<button id="code-btn" class="button secondary">Show Code</button>
+<button id="export-js-btn" class="button secondary">Export JS</button>
+</div>
+<div id="preview" class="preview">
+<p class="placeholder">Add tags from the toolbox to build your template.</p>
+</div>
+</section>
+</div>
+<div id="code-modal" class="modal" style="display:none;">
+<div class="modal-content">
+<span id="close-modal" class="close">&times;</span>
+<h3>Template HTML</h3>
+<pre id="code-output"></pre>
+</div>
+</div>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
