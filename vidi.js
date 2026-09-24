@@ -1,532 +1,376 @@
 "use strict";
 
 /**
- * vidi - Data management and visualization for web applications
- * JavaScript based data management and visualization system
- * Can be fully embedded into a script tag, hosted in a static page
- * No web server required to work
+ * vidi — render database output coming from pod.
+ *
+ * Fetches records from a pod endpoint (or any JSON endpoint with a compatible
+ * shape: { records: […] } or { count, records: [{ id, fields: {…} }] }) and
+ * renders them as a paged set of cards, with HTML escaping on every value, a
+ * working pager, and CSV export.
+ *
+ * Usage:
+ *   new Vidi({ dataSource: "/api/pod/table/acme/items?format=json", pageSize: 12 });
+ *   // renders into #vidi-cards-container and #vidi-pagination by default
+ *
+ * Browser global: window.Vidi (class) and window.vidi (same class, for the
+ * `new Vidi({…})` contract). No external dependencies.
  */
 
-class Vidi {
-  constructor(options = {}) {
-    this.options = {
-      dataSource: options.dataSource || null,
-      encryptionKey: options.encryptionKey || null,
-      enableCORS: options.enableCORS !== false,
-      pagination: options.pagination || { pageSize: 10, enabled: true },
-      cookieSettings: options.cookieSettings || { secure: false, httpOnly: true },
-      ...options
-    };
-    this.dataStore = new Map();
-    this.initialized = false;
-    this.currentPage = 1;
-    this.data = [];
+(function () {
+  "use strict";
+
+  var ESC = {
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return ESC[c];
+    });
   }
 
-  /**
-   * Initialize the data visualization and management system
-   */
-  init() {
-    if (this.initialized) return;
-    
-    this.initialized = true;
-    this.loadData();
-    this.setupEventListeners();
-    this.renderData();
-    return this;
-  }
-
-  /**
-   * Load data from source or storage
-   */
-  loadData() {
-    if (this.options.dataSource) {
-      this.loadFromSource();
-    } else {
-      this.loadFromStorage();
-    }
-  }
-
-  /**
-   * Load data from external source
-   */
-  async loadFromSource() {
-    try {
-      const response = await this.fetchData(this.options.dataSource);
-      this.data = this.processData(response);
-      this.saveToStorage(this.data);
-    } catch (error) {
-      console.error('Failed to load data from source:', error);
-      this.loadFromStorage();
-    }
-  }
-
-  /**
-   * Load data from local storage
-   */
-  loadFromStorage() {
-    const storedData = localStorage.getItem('vidi_data');
-    this.data = storedData ? JSON.parse(storedData) : [];
-    this.indexData();
-  }
-
-  /**
-   * Save data to local storage with encryption
-   */
-  saveToStorage(data) {
-    const serialized = JSON.stringify(data);
-    const encrypted = this.options.encryptionKey ? 
-      this.encryptData(serialized) : serialized;
-    localStorage.setItem('vidi_data', encrypted);
-  }
-
-  /**
-   * Process and normalize data
-   */
-   processData(data) {
-    return data.map(item => ({
-      id: item.id || this.generateId(),
-      title: item.title || item.name || '',
-      description: item.description || '',
-      value: item.value || item.amount || null,
-      timestamp: item.timestamp || new Date().toISOString(),
-      category: item.category || 'general',
-      metadata: item.metadata || {}
-    }));
-  }
-
-  /**
-   * Index data for faster searching
-   */
-  indexData() {
-    this.dataStore.clear();
-    this.data.forEach(item => {
-      const key = this.options.pagination.enabled ? item.category || 'uncategorized' : 'all';
-      if (!this.dataStore.has(key)) {
-        this.dataStore.set(key, []);
+  function el(tag, attrs, children) {
+    var n = document.createElement(tag);
+    for (var k in attrs || {}) {
+      if (Object.prototype.hasOwnProperty.call(attrs, k)) {
+        var v = attrs[k];
+        if (k === "disabled") {
+          n.disabled = !!v;
+        } else if (v == null || v === "") {
+          continue; // never setAttribute(null) — that would set the attribute
+        } else if (k === "class") n.className = v;
+        else if (k === "text") n.textContent = v;
+        else if (k === "html") n.innerHTML = v; // only used internally with escaped/trusted content
+        else n.setAttribute(k, v);
       }
-      this.dataStore.get(key).push(item);
+    }
+    (children || []).forEach(function (c) {
+      if (c == null) return;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
     });
+    return n;
   }
 
-  /**
-   * Fetch data from URL with CORS support
-   */
-  async fetchData(url) {
-    const fetchOptions = {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
+  // Normalize a record into a flat object of {field: value} pairs. pod rows
+  // arrive as { id, fields: {…} }; other sources may send flat maps. Any
+  // nested container is flattened so cards can show everything.
+  function normalizeRow(rec) {
+    var row = {};
+    if (!rec) return row;
+    if (rec.fields && typeof rec.fields === "object" && !Array.isArray(rec.fields)) {
+      for (var f in rec.fields) {
+        if (Object.prototype.hasOwnProperty.call(rec.fields, f)) row[f] = rec.fields[f];
       }
-    };
-
-    if (this.options.enableCORS) {
-      fetchOptions.mode = 'cors';
+    } else if (rec.value && typeof rec.value === "object") {
+      for (var v in rec.value) {
+        if (Object.prototype.hasOwnProperty.call(rec.value, v)) row[v] = rec.value[v];
+      }
     }
-
-    const response = await fetch(url, fetchOptions);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    for (var k in rec) {
+      if (k === "fields" || k === "value") continue;
+      if (typeof rec[k] === "object" && rec[k] !== null) continue;
+      if (row[k] === undefined) row[k] = rec[k];
     }
-
-    return response.json();
+    // Always ensure a visible identifier.
+    if (row.id === undefined && rec.id !== undefined) row.id = rec.id;
+    return row;
   }
 
-  /**
-   * Encrypt data with AES
-   */
-  encryptData(data) {
-    if (!this.options.encryptionKey) return data;
-    
-    try {
-      const encoder = new TextEncoder();
-      const encodedData = encoder.encode(data);
-      const keyData = encoder.encode(this.options.encryptionKey);
-      
-      return btoa(String.fromCharCode(...encodedData.map(b => b ^ keyData[b % keyData.length])));
-    } catch (error) {
-      console.error('Encryption failed:', error);
-      return data;
-    }
-  }
-
-  /**
-   * Decrypt data with AES
-   */
-  decryptData(encryptedData) {
-    if (!this.options.encryptionKey) return encryptedData;
-    
-    try {
-      const encodedData = new Uint8Array(Array.from(atob(encryptedData), c => c.charCodeAt(0)));
-      const keyData = new TextEncoder().encode(this.options.encryptionKey);
-      
-      return String.fromCharCode(...encodedData.map((b, i) => b ^ keyData[i % keyData.length]));
-    } catch (error) {
-      console.error('Decryption failed:', error);
-      return encryptedData;
-    }
-  }
-
-  /**
-   * Setup event listeners for data operations
-   */
-  setupEventListeners() {
-    document.addEventListener('vidi:add', this.handleAddData.bind(this));
-    document.addEventListener('vidi:update', this.handleUpdateData.bind(this));
-    document.addEventListener('vidi:delete', this.handleDeleteData.bind(this));
-  }
-
-  /**
-   * Handle add data event
-   */
-  handleAddData(event) {
-    const { detail } = event;
-    this.addData(detail.data);
-  }
-
-  /**
-   * Handle update data event
-   */
-  handleUpdateData(event) {
-    const { detail } = event;
-    this.updateData(detail.id, detail.updates);
-  }
-
-  /**
-   * Handle delete data event
-   */
-  handleDeleteData(event) {
-    const { detail } = event;
-    this.deleteData(detail.id);
-  }
-
-  /**
-   * Add new data item
-   */
-  addData(data) {
-    const processedData = this.processData([data])[0];
-    this.data.push(processedData);
-    this.saveToStorage(this.data);
-    this.indexData();
-    this.renderData();
-  }
-
-  /**
-   * Update existing data item
-   */
-  updateData(id, updates) {
-    const index = this.data.findIndex(item => item.id === id);
-    if (index !== -1) {
-      this.data[index] = { ...this.data[index], ...updates };
-      this.saveToStorage(this.data);
-      this.indexData();
-      this.renderData();
-    }
-  }
-
-  /**
-   * Delete data item
-   */
-  deleteData(id) {
-    this.data = this.data.filter(item => item.id !== id);
-    this.saveToStorage(this.data);
-    this.indexData();
-    this.renderData();
-  }
-
-  /**
-   * Query data with filters
-   */
-  queryData(filters = {}) {
-    let results = [...this.data];
-
-    if (filters.category) {
-      results = results.filter(item => item.category === filters.category);
-    }
-
-    if (filters.search) {
-      const searchTerm = filters.search.toLowerCase();
-      results = results.filter(item =>
-        item.title.toLowerCase().includes(searchTerm) ||
-        item.description.toLowerCase().includes(searchTerm)
-      );
-    }
-
-    if (filters.minValue !== undefined) {
-      results = results.filter(item => item.value >= filters.minValue);
-    }
-
-    return results;
-  }
-
-  /**
-   * Get paginated data
-   */
-  getPaginatedData(page = this.currentPage, filters = {}) {
-    let results = this.queryData(filters);
-    
-    if (this.options.pagination.enabled) {
-      const startIndex = (page - 1) * this.options.pagination.pageSize;
-      const endIndex = Math.min(startIndex + this.options.pagination.pageSize, results.length);
-      results = results.slice(startIndex, endIndex);
-    }
-
-    this.currentPage = page;
-    return results;
-  }
-
-  /**
-   * Get total pages for pagination
-   */
-  getTotalPages(filters = {}) {
-    const results = this.queryData(filters);
-    if (!this.options.pagination.enabled) return 1;
-    
-    return Math.ceil(results.length / this.options.pagination.pageSize);
-  }
-
-  /**
-   * Generate unique ID
-   */
-  generateId() {
-    return Math.random().toString(36).substr(2, 9);
-  }
-
-  /**
-   * Setup password hashing using SHA-256
-   */
-  async hashPassword(password) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex;
-  }
-
-  /**
-   * Validate password against stored hash
-   */
-  async validatePassword(password, storedHash) {
-    const hashedPassword = await this.hashPassword(password);
-    return hashedPassword === storedHash;
-  }
-
-  /**
-   * Manage cookies with security settings
-   */
-  manageCookies(action, name, value, options = {}) {
-    const cookieOptions = {
-      secure: this.options.cookieSettings.secure,
-      httpOnly: this.options.cookieSettings.httpOnly,
-      sameSite: options.sameSite || 'lax',
-      ...options
-    };
-
-    const cookieString = this.buildCookieString(name, value, cookieOptions);
-
-    if (action === 'set') {
-      document.cookie = cookieString;
-      return this;
-    } else if (action === 'get') {
-      return this.parseCookie(name);
-    } else if (action === 'delete') {
-      document.cookie = this.buildCookieString(name, '', { ...cookieOptions, expires: 'Thu, 01 Jan 1970 00:00:00 GMT' });
-      return this;
-    }
-  }
-
-  /**
-   * Build cookie string
-   */
-  buildCookieString(name, value, options) {
-    let cookie = `${name}=${encodeURIComponent(value)}`;
-    if (options.expires) cookie += `; expires=${options.expires}`;
-    if (options.secure) cookie += '; secure';
-    if (options.httpOnly) cookie += '; httponly';
-    cookie += `; samesite=${options.sameSite}`;
-    cookie += '; path=/';
-    return cookie;
-  }
-
-  /**
-   * Parse cookie value
-   */
-  parseCookie(name) {
-    const cookies = document.cookie.split(';');
-    const cookie = cookies.find(c => c.trim().startsWith(`${name}=`));
-    return cookie ? decodeURIComponent(cookie.split('=')[1]) : null;
-  }
-
-  /**
-   * Render data as cards or visualizations
-   */
-  renderData() {
-    this.renderCards(this.getPaginatedData());
-    this.setupPaginationControls();
-  }
-
-  /**
-   * Render data as cards
-   */
-  renderCards(data) {
-    const container = document.getElementById('vidi-cards-container');
-    if (!container) return;
-
-    container.innerHTML = '';
-
-    data.forEach(item => {
-      const card = this.createCard(item);
-      container.appendChild(card);
+  function prettyField(name) {
+    return String(name).replace(/[_-]+/g, " ").replace(/\b\w/g, function (c) {
+      return c.toUpperCase();
     });
   }
 
-  /**
-   * Create a card element for an item
-   */
-  createCard(item) {
-    const card = document.createElement('div');
-    card.className = 'vidi-card';
-    card.setAttribute('data-id', item.id);
-
-    card.innerHTML = `
-      <div class="vidi-card-header">
-        <h3 class="vidi-card-title">${item.title}</h3>
-        <span class="vidi-card-category">${item.category}</span>
-      </div>
-      <div class="vidi-card-body">
-        <p class="vidi-card-description">${item.description}</p>
-        ${item.value ? `<div class="vidi-card-value">${item.value}</div>` : ''}
-      </div>
-      <div class="vidi-card-footer">
-        <span class="vidi-card-timestamp">${new Date(item.timestamp).toLocaleDateString()}</span>
-      </div>
-    `;
-
-    card.addEventListener('click', () => this.selectCard(item));
-
-    return card;
-  }
-
-  /**
-   * Handle card selection
-   */
-  selectCard(item) {
-    const event = new CustomEvent('vidi:card-select', {
-      detail: { item }
-    });
-    document.dispatchEvent(event);
-  }
-
-  /**
-   * Setup pagination controls
-   */
-  setupPaginationControls() {
-    if (!this.options.pagination.enabled) return;
-
-    const totalPages = this.getTotalPages();
-    if (totalPages <= 1) return;
-
-    let paginationHTML = '';
-    for (let i = 1; i <= totalPages; i++) {
-      paginationHTML += `
-        <button class="vidi-page-btn" data-page="${i}" ${i === this.currentPage ? 'disabled' : ''}>${i}</button>
-      `;
+  class Vidi {
+    /**
+     * @param {Object} opts
+     *   dataSource  URL of the pod/JSON endpoint (required)
+     *   container   CSS selector for the cards container (default #vidi-cards-container)
+     *   pagination  CSS selector for the pager (default #vidi-pagination)
+     *   pageSize    records per page (default 12)
+     *   fields      optional array of field names to display (default: all but bookkeeping)
+     *   titleField  optional field used as the card title (default: title if present)
+     *   onRender    optional callback after each render (rows, container)
+     */
+    constructor(opts) {
+      opts = opts || {};
+      this.dataSource = opts.dataSource;
+      if (!this.dataSource) throw new Error("vidi: dataSource is required");
+      this.pageSize = opts.pageSize || 12;
+      this.page = 0;
+      this.rows = [];
+      this.fields = opts.fields || null;
+      this.titleField = opts.titleField || null;
+      this.onRender = opts.onRender || null;
+      this.container = document.querySelector(opts.container || "#vidi-cards-container");
+      this.pagination = document.querySelector(opts.pagination || "#vidi-pagination");
+      this.escaped = true; // always escape; kept as a flag for introspection
+      this.loading = false;
+      this.load();
     }
 
-    const paginationContainer = document.getElementById('vidi-pagination');
-    if (paginationContainer) {
-      paginationContainer.innerHTML = paginationHTML;
-      this.setupPaginationListeners();
+    load() {
+      if (this.loading) return;
+      this.loading = true;
+      var self = this;
+      if (this.container) {
+        this.container.innerHTML = "";
+        this.container.appendChild(el("div", { class: "vidi-loading" }, ["Loading…"]));
+      }
+      fetch(this.dataSource, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json, application/xml, text/xml, */*" },
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          var ct = (res.headers.get("content-type") || "").toLowerCase();
+          if (ct.indexOf("xml") !== -1) {
+            return res.text().then(function (txt) { return self._parseXML(txt); });
+          }
+          return res.json();
+        })
+        .then(function (data) {
+          self.loading = false;
+          self._ingest(data);
+        })
+        .catch(function (err) {
+          self.loading = false;
+          self._error(err);
+        });
     }
-  }
 
-  /**
-   * Setup pagination listeners
-   */
-  setupPaginationListeners() {
-    const pageButtons = document.querySelectorAll('.vidi-page-btn');
-    pageButtons.forEach(button => {
-      button.addEventListener('click', (e) => {
-        const page = parseInt(e.currentTarget.getAttribute('data-page'));
-        this.renderData();
+    // pod can return XML; parse it into the same record shape. The XML layout
+    // pod emits is <records><record id="…"><field name="…">value</field>…
+    // </record></records>.
+    _parseXML(xmlText) {
+      var doc = new DOMParser().parseFromString(xmlText, "text/xml");
+      var root = doc.documentElement;
+      if (!root || root.nodeName === "parsererror") {
+        throw new Error("vidi: unparseable XML response");
+      }
+      var out = [];
+      var recNodes = root.getElementsByTagName("record");
+      for (var i = 0; i < recNodes.length; i++) {
+        var rn = recNodes[i];
+        var row = { id: rn.getAttribute("id") || "" };
+        var fs = rn.getElementsByTagName("field");
+        for (var j = 0; j < fs.length; j++) {
+          var fn = fs[j].getAttribute("name") || "field" + j;
+          row[fn] = fs[j].textContent || "";
+        }
+        out.push(row);
+      }
+      return { records: out };
+    }
+
+    _ingest(data) {
+      // Accept several shapes: {records:[…]}, {items:[…]}, or a bare array.
+      var records = null;
+      if (Array.isArray(data)) records = data;
+      else if (data && Array.isArray(data.records)) records = data.records;
+      else if (data && Array.isArray(data.items)) records = data.items;
+      else if (data && data.record) records = [data.record];
+      if (!records) {
+        this._error(new Error("vidi: no records in response"));
+        return;
+      }
+      this.rows = records.map(normalizeRow);
+      this.total = this.rows.length;
+      this.page = 0;
+      this._render();
+    }
+
+    _selectedFields() {
+      if (this.fields && this.fields.length) return this.fields.slice();
+      var names = [];
+      var seen = {};
+      var skip = { id: 1, created: 1, updated: 1, version: 1, schema_version: 1 };
+      for (var i = 0; i < this.rows.length; i++) {
+        for (var k in this.rows[i]) {
+          if (!Object.prototype.hasOwnProperty.call(this.rows[i], k)) continue;
+          if (skip[k]) continue;
+          if (!seen[k]) {
+            seen[k] = true;
+            names.push(k);
+          }
+        }
+      }
+      // Deterministic order, id first.
+      names.sort();
+      return names;
+    }
+
+    _render() {
+      var fields = this._selectedFields();
+      var totalPages = Math.max(1, Math.ceil(this.rows.length / this.pageSize));
+      if (this.page >= totalPages) this.page = totalPages - 1;
+      if (this.page < 0) this.page = 0;
+      var start = this.page * this.pageSize;
+      var slice = this.rows.slice(start, start + this.pageSize);
+
+      var self = this;
+      if (this.container) {
+        this.container.innerHTML = "";
+        if (slice.length === 0) {
+          this.container.appendChild(el("div", { class: "vidi-empty" }, ["No records"]));
+        } else {
+          slice.forEach(function (row) {
+            self.container.appendChild(self._card(row, fields, self._titleField(row)));
+          });
+        }
+      }
+      this._renderPager(totalPages);
+      if (this.onRender) {
+        try { this.onRender(this.rows.slice(), this.container); } catch (e) { /* callback errors are non-fatal */ }
+      }
+    }
+
+    _titleField(row) {
+      if (this.titleField && row[this.titleField] !== undefined) return row[this.titleField];
+      var preferred = ["title", "name", "subject", "label"];
+      for (var i = 0; i < preferred.length; i++) {
+        var v = row[preferred[i]];
+        if (v !== undefined && v !== null && String(v) !== "") return v;
+      }
+      return null;
+    }
+
+    _card(row, fields, title) {
+      var card = el("article", { class: "vidi-card vidi-row" });
+      var head = el("header", { class: "vidi-card-head" });
+      if (title != null) {
+        head.appendChild(el("h3", { class: "vidi-card-title", text: String(title) }));
+      } else if (row.id !== undefined && row.id !== "") {
+        head.appendChild(el("h3", { class: "vidi-card-title", text: String(row.id) }));
+      }
+      card.appendChild(head);
+
+      var dl = el("dl", { class: "vidi-fields" });
+      fields.forEach(function (f) {
+        var v = row[f];
+        if (v === undefined || v === null) return;
+        var s = String(v);
+        if (s === "") return;
+        dl.appendChild(el("dt", { class: "vidi-field-name" }, [prettyField(f)]));
+        var dd = el("dd", { class: "vidi-field-value" });
+        if (f === "link" || (looksLikeURL(s) && fields.indexOf(f) === fields.length - 1)) {
+          dd.appendChild(el("a", { href: s, target: "_blank", rel: "noopener noreferrer", text: s }));
+        } else {
+          // Safe: every dynamic value goes through esc() before innerHTML.
+          dd.innerHTML = esc(s).replace(/\n/g, "<br>");
+        }
+        dl.appendChild(dd);
       });
-    });
-  }
+      card.appendChild(dl);
+      return card;
+    }
 
-  /**
-   * Export data to CSV
-   */
-  exportData(filename = 'vidi-data.csv') {
-    const headers = ['ID', 'Title', 'Description', 'Value', 'Category', 'Timestamp'];
-    const csvRows = [headers.join(',')];
+    _renderPager(totalPages) {
+      var self = this;
+      if (!this.pagination) return;
+      this.pagination.innerHTML = "";
+      if (totalPages <= 1 && this.rows.length === 0) return;
 
-    this.data.forEach(item => {
-      const row = [
-        item.id,
-        item.title,
-        item.description,
-        item.value,
-        item.category,
-        item.timestamp
-      ];
-      csvRows.push(row.join(','));
-    });
+      var nav = el("nav", { class: "vidi-pager", "aria-label": "Pagination" });
+      var count = el("span", { class: "vidi-count" }, [
+        this.rows.length + " records · page " + (this.page + 1) + " of " + totalPages,
+      ]);
+      nav.appendChild(count);
 
-    const csvContent = csvRows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
+      function btn(label, go, disabled) {
+        var b = el("button", {
+          class: "vidi-page-btn" + (go === self.page ? " active" : ""),
+          type: "button",
+          disabled: disabled ? "disabled" : null,
+        }, [label]);
+        b.addEventListener("click", function () {
+          if (go < 0 || go >= totalPages || go === self.page) return;
+          self.page = go;
+          self._render();
+          self._scrollToTop();
+        });
+        return b;
+      }
 
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+      nav.appendChild(btn("‹ Prev", self.page - 1, self.page === 0));
+      // Window of page buttons around the current page.
+      var from = Math.max(0, self.page - 2);
+      var to = Math.min(totalPages - 1, from + 4);
+      from = Math.max(0, to - 4);
+      for (var p = from; p <= to; p++) nav.appendChild(btn(String(p + 1), p, false));
+      nav.appendChild(btn("Next ›", self.page + 1, self.page >= totalPages - 1));
 
-  /**
-   * Clear all data
-   */
-  clearData() {
-    if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
-      this.data = [];
-      this.saveToStorage(this.data);
-      this.indexData();
-      this.renderData();
+      // CSV export is always available.
+      var csv = el("button", { class: "vidi-page-btn vidi-csv", type: "button" }, ["Export CSV"]);
+      csv.addEventListener("click", function () { self.exportCSV(); });
+      nav.appendChild(csv);
+
+      this.pagination.appendChild(nav);
+    }
+
+    _scrollToTop() {
+      if (this.container && this.container.scrollIntoView) {
+        try { this.container.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { /* noop */ }
+      }
+    }
+
+    _error(err) {
+      if (this.container) {
+        this.container.innerHTML = "";
+        this.container.appendChild(el("div", { class: "vidi-error" }, [
+          "vidi: " + (err && err.message ? err.message : "failed to load data"),
+        ]));
+      }
+      if (this.onError) this.onError(err);
+    }
+
+    /** Export the currently loaded rows as a CSV file (all pages). */
+    exportCSV() {
+      var fields = this._selectedFields();
+      var lines = [];
+      lines.push(fields.map(function (f) { return csvCell(prettyField(f)); }).join(","));
+      this.rows.forEach(function (row) {
+        lines.push(fields.map(function (f) { return csvCell(row[f]); }).join(","));
+      });
+      var csvData = "\uFEFF" + lines.join("\r\n");
+      var blob = new Blob([csvData], { type: "text/csv;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "pod-export.csv";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 0);
+      return lines;
     }
   }
-}
 
-/**
- * Initialize vidi when DOM is ready
- */
-const vidi = new Vidi({
-  pagination: { pageSize: 10, enabled: true },
-  enableCORS: true,
-  cookieSettings: { secure: false, httpOnly: true }
-});
+  function csvCell(v) {
+    var s = String(v == null ? "" : v);
+    if (s.indexOf(",") !== -1 || s.indexOf('"') !== -1 || s.indexOf("\n") !== -1) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
 
-// Global configuration function
-const configureVidi = (options) => {
-  Object.assign(vidi.options, options);
-  vidi.init();
-};
+  function looksLikeURL(s) {
+    return /^(https?|mailto|tel):\/?\/?/i.test(s);
+  }
 
-// Auto-initialize when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    vidi.init();
-  });
-} else {
-  vidi.init();
-}
+  // Auto-init readiness: the contract is `new Vidi({dataSource})`, so no
+  // automatic fetch happens here — callers construct it explicitly.
 
-// Export for module systems
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { Vidi };
-}
+  // Export for module systems
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { Vidi: Vidi };
+  }
 
-if (typeof window !== 'undefined') {
-  window.vidi = { Vidi, vidi, configureVidi };
-}
+  if (typeof window !== "undefined") {
+    window.Vidi = Vidi;
+    window.vidi = Vidi;
+  }
+})();
