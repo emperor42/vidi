@@ -1,613 +1,199 @@
-# VIDI (Data Visualization System)
+# VIDI
 
-**MIT License © Matthew Salvatore Giancola**
+VIDI is a small, dependency-free browser library for rendering records from a
+JSON or XML endpoint as escaped cards, with pagination and CSV export.
 
-## Overview
+The root of this component contains two separate things:
 
-VIDI is a data management and visualization system that enables visualization of data put into HTML forms as cards. It also manages cookies, secrets and other web-based data with built-in security features. It can automatically paginate large loading data and integrate URL-based sources with CORS handling.
+- **`vidi.js`** is the browser API. It does not need a Node.js runtime, a
+  bundler, or a Go server.
+- **`main.go`, `static/`, and `templates/`** are an optional Go template-editor
+  demo. They are not required to use `vidi.js`.
 
-## Installation
+The archived material in [`legacy/`](legacy/) is retained for reference and is
+not part of the current build or API.
 
-### Prerequisites
-- Node.js (for build tools, optional for runtime)
-- Modern web browser with JavaScript support
-- No external server dependencies required
+## Browser API
 
-### Installation Steps
+### Include the library
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/emperor42/vidi.git
-   cd vidi
-   ```
-
-2. Include VIDI in your HTML:
-   ```html
-   <!-- Option 1: Direct script tag -->
-   <script src="vidi.js"></script>
-
-   <!-- Option 2: Local file -->
-   <script>
-   // VIDI will automatically initialize
-   </script>
-   ```
-
-3. For Node.js development (optional):
-   ```bash
-   # Install build tools
-   npm install
-   
-   # Build for distribution
-   npm run build
-   ```
-
-## Usage (Standalone)
-
-### Basic Usage
-
-```javascript
-// Basic VIDI usage
-<script src="vidi.js"></script>
-
-// VIDI will automatically initialize with default configuration
-const vidi = new VIDI({
-  dataSource: 'https://api.example.com/data',
-  pagination: { pageSize: 10, enabled: true },
-  enableCORS: true,
-  cookieSettings: { secure: false, httpOnly: true }
-});
-
-// Initialize and render
-vidi.init();
-```
-
-### Advanced Usage
-
-```javascript
-// Create a VIDI instance with advanced configuration
-const vidi = new VIDI({
-  dataSource: 'https://api.example.com/data',
-  encryptionKey: 'your-encryption-key',
-  pagination: { pageSize: 20, enabled: true },
-  enableCORS: true,
-  cookieSettings: { secure: true, httpOnly: true },
-  onDataLoad: function(data) {
-    console.log(`Loaded ${data.length} data items`);
-  },
-  onCardSelect: function(item) {
-    console.log(`Selected card: ${item.title}`);
-  }
-});
-
-// Load data from source
-vidi.loadDataFromSource().then(() => {
-  // Render data as cards
-  vidi.renderData();
-});\n// Query data
-const filteredData = vidi.queryData({
-  category: 'important',
-  search: 'urgent'
-});
-
-// Get paginated data
-const pageData = vidi.getPaginatedData(1, { category: 'recent' });
-```
-
-### API Endpoints
-
-| Method | Description |
-|--------|-------------|
-| `new VIDI(options)` | Create new VIDI instance |
-| `vidi.init()` | Initialize VIDI |
-| `vidi.loadData()` | Load data from source or storage |
-| `vidi.addData(data)` | Add new data item |
-| `vidi.updateData(id, updates)` | Update existing data item |
-| `vidi.deleteData(id)` | Delete data item |
-| `vidi.queryData(filters)` | Query data with filters |
-| `vidi.getPaginatedData(page, filters)` | Get paginated data |
-| `vidi.getTotalPages(filters)` | Get total pages for pagination |
-| `vidi.renderData()` | Render data as cards |
-| `vidi.renderCards(data)` | Render specific data as cards |
-| `vidi.createCard(item)` | Create card element for item |
-| `vidi.setupPaginationControls()` | Setup pagination controls |
-
-### Example HTML Page
+Serve `vidi.js` as a normal browser asset:
 
 ```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>VIDI Data Visualization Demo</title>
-    <!-- Include VIDI -->
-    <script src="vidi.js"></script>
-</head>
-<body>
-    <!-- VIDI will automatically create card visualization -->
-    <div id="vidi-container"></div>
-    <!-- VIDI will render data as cards here -->
-    
-    <!-- Pagination controls -->
-    <div id="pagination"></div>
-    
-    <script>
-    // VIDI automatically initializes after loading
-    document.addEventListener('VIDI-ready', function() {
-        // VIDI has loaded and rendered data
-        console.log('VIDI is ready');
-        
-        // Example: Handle card selection
-        vidi.on('vidi:card-select', (event) => {
-            const { item } = event.detail;
-            console.log('Card selected:', item);
-            // Handle card selection
-        });
-    });
-    </script>
-</body>
-</html>
+<script src="/path/to/vidi.js"></script>
+<div id="vidi-cards-container"></div>
+<div id="vidi-pagination"></div>
 ```
 
-## Integration with ATP
+Construct an instance after those elements exist. Construction starts a fetch
+immediately; there is no `init()`, automatic singleton, or automatic DOM scan:
 
-### Data Integration
-
-VIDI integrates with ATP to provide centralized data management and visualization:
-
-```javascript
-// VIDI with ATP integration
-const vidi = new VIDI({
-    dataSource: '/atp/api/data',
-    pagination: { pageSize: 10, enabled: true },
-    enableCORS: true,
-    cookieSettings: { secure: false, httpOnly: true },
-    onDataLoad: function(data) {
-        console.log(`Loaded ${data.length} data items from ATP`);
-        vidi.renderData();
+```html
+<script>
+  const view = new Vidi({
+    dataSource: "/s/data/azzurrotech/posts",
+    pageSize: 12,
+    fields: ["title", "body", "link"],
+    titleField: "title",
+    onRender: function (rows, container) {
+      console.log("rendered " + rows.length + " rows", container);
     },
-    onError: function(error) {
-        console.error('Data loading error:', error);
+    onError: function (error) {
+      console.error(error);
     }
-});
-
-// Load data from ATP
-vidi.loadDataFromSource().then(() => {
-    console.log('Data loaded from ATP successfully');
-});
+  });
+</script>
 ```
 
-### Configuration Integration
+`window.Vidi` and `window.vidi` both refer to the constructor. A CommonJS
+consumer can use `const { Vidi } = require("./vidi.js")`.
 
-```javascript
-// VIDI configuration for ATP integration
-const vidiConfig = {
-    dataSource: '/atp/api/data',
-    pagination: { pageSize: 10, enabled: true },
-    enableCORS: true,
-    cookieSettings: { secure: false, httpOnly: true },
-    encryptionKey: 'your-encryption-key',
-    apiEndpoint: '/atp/api',
-    syncStrategy: 'merge', // merge, replace, append
-    onDataLoad: function(data) {
-        console.log(`Loaded ${data.length} data items`);
-        vidi.renderData();
-    },
-    onCardSelect: function(item) {
-        console.log(`Card selected: ${item.title}`);
-        // Handle card selection
-    },
-    onError: function(error) {
-        console.error('VIDI error:', error);
-    }
-};
+### Constructor options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `dataSource` | required | URL passed to `fetch`. |
+| `container` | `#vidi-cards-container` | CSS selector for the cards element. |
+| `pagination` | `#vidi-pagination` | CSS selector for the pager element. |
+| `pageSize` | `12` | Number of records shown per page. |
+| `fields` | all non-bookkeeping fields | Non-empty array of field names to display. |
+| `titleField` | automatic | Preferred title field. The automatic order is `title`, `name`, `subject`, then `label`. |
+| `onRender` | none | Called with `(rows, container)` after a render. Callback errors are ignored. |
+| `onError` | none | Called when loading fails. |
+
+The instance exposes `rows`, `page`, `total`, `loading`, `container`, and
+`pagination`. Calling `load()` fetches again, unless a load is already in
+progress. The fetch uses `credentials: "same-origin"`; cross-origin requests
+still require a CORS policy from the data server.
+
+### Accepted data shapes
+
+JSON can be a bare array, `{ "records": [...] }`, `{ "items": [...] }`, or a
+single `{ "record": {...} }`. A pod-style row such as
+`{ "id": "42", "fields": { "title": "Hello" } }` is normalized into a top-level row.
+An `XML` response is also supported when it has this general shape:
+
+```xml
+<records>
+  <record id="42">
+    <field name="title">Hello</field>
+    <field name="body">A record body</field>
+  </record>
+</records>
 ```
 
-### Data Management Pipeline
+### Rendering and URL safety
 
-1. **Data Collection**: VIDI collects data from ATP or configured sources
-2. **Data Processing**: Raw data is processed and normalized
-3. **Data Visualization**: Processed data is visualized as cards
-4. **Data Storage**: Data is stored in local storage or cookies
-5. **Data Distribution**: Data is distributed through VIDI APIs
-6. **User Interaction**: Users interact with visualized data
+Card content is built with DOM text nodes. Text values are HTML-escaped before
+line breaks are added, so a record cannot inject markup through a normal field.
 
-## Development Setup
+A value is rendered as an `<a>` only when it is a candidate for a link **and**
+uses one of these schemes:
 
-### Local Development
+- `http:`
+- `https:`
+- `mailto:`
+- `tel:`
+
+The `link` field is a link candidate regardless of its position among the
+selected fields; the final selected field is also a candidate. Candidates with
+another scheme, a missing scheme, or a relative value are rendered as text,
+not placed in an `href`. In particular, `javascript:`, `data:`, and
+protocol-relative values do not become executable links.
+
+The pager changes pages in memory and the **Export CSV** button downloads all
+currently loaded rows. CSV is data, not a sanitized spreadsheet format; if it
+will be opened by a spreadsheet application, treat formulas and other active
+content as a separate consumer-side concern.
+
+## Optional Go template demo
+
+The Go program is a deliberately small demonstration of storing and serving
+HTML snippets. It is not a required backend for the browser library.
+
+### Run locally
+
+From this directory (the module root):
 
 ```bash
-# Test in browser
-# Open browser and load:
-# http://localhost:8080/vidi.html
-# (VIDI will automatically load and display data)
-
-# Or with Node.js
-node -e "require('vidi').test()"
+go run .
 ```
 
-### Testing
+The server listens on **127.0.0.1:8084** by default. Templates are stored as
+JSON files in `templates_data/`, which is created on startup. The editor page
+is served from `templates/index.html`. A non-loopback listener is refused at
+startup unless `VIDI_API_TOKEN` is set; when set, the token is required for
+all non-static routes (bearer or `X-Vidi-Token`).
 
-```javascript
-// Basic VIDI usage test
-const VIDI = window.VIDI;
+### Routes
 
-const testVidi = () => {
-    // Test VIDI initialization
-    const vidi = new VIDI({
-        pagination: { pageSize: 10, enabled: true },
-        enableCORS: true
-    });
-    
-    expect(vidi).toBeDefined();
-    expect(vidi.pagination).toBeDefined();
-    
-    // Test data loading
-    vidi.init();
-    const data = vidi.getPaginatedData();
-    expect(data).toBeDefined();
-};
+| Method | Route | Behavior |
+| --- | --- | --- |
+| `GET` | `/` | Visual editor and list of stored templates. |
+| `GET` | `/<name>` | Return the stored HTML for a name. |
+| `GET` | `/static/...` | Serve the demo's static assets. |
+| `GET` | `/api/templates` | Return `var templates = [...]` for the editor/export UI. |
+| `POST` | `/api/templates` | Save JSON `{ "name": "...", "html": "..." }`. |
+| `GET` | `/api/templates/<name>` | Return one stored HTML document. |
+| `DELETE` | `/api/templates/<name>` | Delete one stored template. |
 
-// Data visualization test
-const testDataVisualization = () => {
-    const vidi = new VIDI({
-        pagination: { pageSize: 10, enabled: true },
-        enableCORS: true
-    });
-    
-    vidi.init();
-    
-    // Mock data
-    const mockData = [
-        { id: 1, title: 'Card 1', description: 'First card', category: 'important' },
-        { id: 2, title: 'Card 2', description: 'Second card', category: 'normal' },
-        { id: 3, title: 'Card 3', description: 'Third card', category: 'urgent' }
-    ];
-    
-    // Add mock data
-    mockData.forEach(item => vidi.addData(item));
-    
-    // Render data
-    vidi.renderData();
-    
-    // Check if data was rendered
-    const cards = document.querySelectorAll('.vidi-card');
-    expect(cards.length).toBe(mockData.length);
-};
-```
+POST requests are limited to 1 MiB and malformed JSON is rejected. Template
+names are restricted to a single filename component made from ASCII letters,
+digits, `.`, `_`, and `-` (maximum 128 characters). Both `/` and `\` are
+rejected, including names supplied in the JSON body, so a name cannot traverse
+outside `templates_data/`. Filesystem read, parse, delete, and write failures
+are returned as server errors rather than being silently ignored.
 
-### Building
+### Docker
+
+The image uses the Go version declared by `go.mod` (`1.21`) and exposes the
+same port as the server:
 
 ```bash
-# Build for distribution
-npm run build
-
-# Output: dist/vidi.js (optimized and bundled)
-
-# Test in browser
-# Open browser and load: dist/vidi.js
+docker build -t vidi-demo .
+docker run --rm -p 127.0.0.1:8084:8084 \
+  -e VIDI_API_TOKEN='replace-with-a-long-random-token' \
+  -v "$PWD/templates_data:/app/templates_data" \
+  vidi-demo
 ```
 
-## API Specifications
+## Security limitations
 
-### High Maturity API (Event-driven)
+The browser library is a rendering component, not an authorization or data
+security boundary:
 
-#### Data Management
-- `new VIDI(options)` - Create new VIDI instance
-- `vidi.init()` - Initialize VIDI
-- `vidi.loadData()` - Load data from source or storage
-- `vidi.addData(data)` - Add new data item
-- `vidi.updateData(id, updates)` - Update existing data item
-- `vidi.deleteData(id)` - Delete data item
-- `vidi.queryData(filters)` - Query data with filters
-- `vidi.getPaginatedData(page, filters)` - Get paginated data
-- `vidi.getTotalPages(filters)` - Get total pages for pagination
+- It trusts the data source's authentication, authorization, availability, and
+  CORS policy. It does not provide user accounts, sessions, encryption, secret
+  storage, or audit logging.
+- Escaping protects the generated card text, but it cannot make an arbitrary
+  page, script, or trusted HTML fragment safe. Treat data and any separately
+  injected HTML as untrusted according to the hosting application's policy.
+- CSV values are not rewritten to remove spreadsheet formula syntax.
 
-#### Data Visualization
-- `vidi.renderData()` - Render data as cards
-- `vidi.renderCards(data)` - Render specific data as cards
-- `vidi.createCard(item)` - Create card element for item
-- `vidi.setupPaginationControls()` - Setup pagination controls
+The Go demo is intended for local development. In the default loopback mode it
+has no token and is not an authorization boundary. If `VIDI_API_TOKEN` is set,
+all non-static routes require a constant-time bearer/`X-Vidi-Token` check; a
+non-loopback bind without that token is refused. Stored HTML is still returned
+verbatim and can execute in the server's origin, so keep the demo behind TLS,
+request limits, and an isolated origin. It has no CSRF protection, per-user
+authorization, or tenant isolation.
 
-#### Storage Management
-- `vidi.saveToStorage(data)` - Save data to local storage
-- `vidi.loadFromStorage()` - Load data from local storage
-- `vidi.clearData()` - Clear all data
+## Development checks
 
-#### Security and Authentication
-- `vidi.hashPassword(password)` - Hash password using SHA-256
-- `vidi.validatePassword(password, storedHash)` - Validate password against stored hash
-- `vidi.manageCookies(action, name, value, options)` - Manage cookies
-- `vidi.encryptData(data)` - Encrypt data with AES
-- `vidi.decryptData(encryptedData)` - Decrypt data
+For a container or other non-loopback deployment, provide `VIDI_API_TOKEN` and
+send it as `Authorization: Bearer …` (or `X-Vidi-Token`) on every non-static
+request. The token is a demo guard, not a user/session system.
 
-#### Event Handling
-- `vidi.on(event, callback)` - Listen for VIDI events
+There is no npm build step for `vidi.js`. From this directory, run:
 
-### VIDI APIs
-
-```javascript
-// Create VIDI instance
-const vidi = new VIDI({
-  dataSource: 'https://api.example.com/data',
-  pagination: { pageSize: 10, enabled: true },
-  enableCORS: true,
-  cookieSettings: { secure: false, httpOnly: true }
-});
-
-// Load data
-await vidi.loadData();
-
-// Render data
-vidi.renderData();
-
-// Add new data
-vidi.addData({
-  id: 4,
-  title: 'Card 4',
-  description: 'Fourth card',
-  category: 'normal'
-});
-
-// Query data
-const filteredData = vidi.queryData({
-  category: 'important',
-  search: 'urgent'
-});
-
-// Get paginated data
-const pageData = vidi.getPaginatedData(1, { category: 'recent' });
-
-// Event handling
-vidi.on('vidi:add', (event) => {
-  console.log('Data added:', event.detail.data);
-});
-
-vidi.on('vidi:update', (event) => {
-  console.log('Data updated:', event.detail);
-});
-
-vidi.on('vidi:delete', (event) => {
-  console.log('Data deleted:', event.detail.id);
-});
+```bash
+gofmt -w main.go main_test.go
+go test ./...
+node --check vidi.js
+node --test vidi_test.js
 ```
 
-### VIDI-specific Events
-
-```javascript
-// Data add event
-vidi.on('vidi:add', (event) => {
-  const { detail } = event;
-  vidi.addData(detail.data);
-});
-
-// Data update event
-vidi.on('vidi:update', (event) => {
-  const { detail } = event;
-  vidi.updateData(detail.id, detail.updates);
-});
-
-// Data delete event
-vidi.on('vidi:delete', (event) => {
-  const { detail } = event;
-  vidi.deleteData(detail.id);
-});
-
-// Card select event
-vidi.on('vidi:card-select', (event) => {
-  const { item } = event.detail;
-  console.log('Card selected:', item);
-});
-```
-
-## Security API
-
-### Data Security
-- `vidi.encryptData(data)` - Encrypt data with AES
-- `vidi.decryptData(encryptedData)` - Decrypt data
-- `vidi.hashPassword(password)` - Hash password using SHA-256
-- `vidi.validatePassword(password, storedHash)` - Validate password
-
-### Cookie Management
-- `vidi.manageCookies(action, name, value, options)` - Manage cookies
-- `vidi.buildCookieString(name, value, options)` - Build cookie string
-- `vidi.parseCookie(name)` - Parse cookie value
-
-### CORS Configuration
-- `vidi.fetchData(url)` - Fetch data with CORS support
-- `vidi.setCORSOrigin(origin)` - Set CORS origin
-- `vidi.getCORSPolicy()` - Get CORS policy
-
-## Integration API
-
-### VENI Integration
-- `vidi.discoverVENIComponents()` - Discover VENI components
-- `vidi.integrateWithVENI(component)` - Integrate with VENI component
-- `vidi.generateFromVENITemplate(template)` - Generate from VENI template
-
-### VICI Integration
-- `vidi.syncWithVICI(changes)` - Synchronize with VICI
-- `vidi.getVIDIChanges()` - Get VICI changes
-- `vidi.applyVIDIChanges(changes)` - Apply VICI changes
-
-### VINI Integration
-- `vidi.getVINIWorkflows()` - Get VINI workflows
-- `vidi.integrateWithVINI(workflow)` - Integrate with VINI workflow
-- `vidi.executeVINIWorkflow(workflow)` - Execute VINI workflow
-
-## Monitoring API
-
-### Data Monitoring
-- `vidi.getTotalItems()` - Get total data items
-- `vidi.getFilteredDataCount(filters)` - Get filtered data count
-- `vidi.getPaginationInfo(page, filters)` - Get pagination information
-
-### Performance Monitoring
-- `vidi.getPerformanceMetrics()` - Get performance metrics
-- `vidi.getDataLoadTime()` - Get data load time
-- `vidi.getRenderTime()` - Get render time
-
-### Event Monitoring
-- `vidi.onDataLoad(callback)` - Data load callback
-- `vidi.onDataError(callback)` - Data error callback
-- `vidi.onCardRender(callback)` - Card render callback
-
-## Error Handling
-
-### VIDI Error Types
-- `DataError` - Data loading and processing errors
-- `SecurityError` - Security-related errors
-- `ValidationError` - Input validation errors
-- `IntegrationError` - Integration-related errors
-
-### Error Response Format
-```javascript
-// VIDI errors
-class VIDISecurityError extends Error {
-  constructor(message, code, details) {
-    super(message);
-    this.code = code;
-    this.details = details;
-    this.timestamp = new Date().toISOString();
-  }
-}
-```
-
-## Testing
-
-### Unit Tests
-
-```javascript
-// Test data loading
- test('Data Loading', () => {
-   const vidi = new VIDI({
-     dataSource: 'test-data.json'
-   });
-   vidi.init();
-   expect(vidi.getTotalItems()).toBeGreaterThan(0);
- });
-
-// Test data querying
- test('Data Querying', () => {
-   const vidi = new VIDI();
-   const filteredData = vidi.queryData({ category: 'test' });
-   expect(filteredData).toBeDefined();
- });
-```
-
-### Integration Tests
-
-```javascript
-// Test VIDI integration
- test('VIDI-VENI Integration', () => {
-   const vidi = new VIDI({
-     dataSource: 'https://venisite.com/data'
-   });
-   vidi.init();
-   expect(vidi.getTotalItems()).toBeGreaterThan(0);
- });
-
-// Test VIDI-VICI integration
- test('VIDI-VICI Integration', () => {
-   const vidi = new VIDI();
-   const changes = vidi.getVIDIChanges();
-   expect(changes).toBeDefined();
- });
-```
-
-## Performance Considerations
-
-- **Memory Usage**: Monitor for large datasets
-- **CPU Usage**: Optimize data processing algorithms
-- **Network I/O**: Cache frequently accessed data
-- **Disk I/O**: Use efficient storage for large datasets
-- **Concurrent Processing**: Support for concurrent data operations
-
-## Future Enhancements
-
-- **Advanced Analytics**: Add advanced data analytics
-- **Machine Learning**: ML-powered data analysis
-- **Real-time Processing**: Add real-time data updates
-- **Advanced Visualization**: Enhanced visualization capabilities
-- **Cloud Integration**: Integrate with cloud data services
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Data not loading**
-   ```javascript
-   // Check VIDI configuration
-   const vidi = new VIDI({
-     dataSource: 'https://api.example.com/data',
-     pagination: { pageSize: 10, enabled: true }
-   });
-   
-   vidi.init();
-   
-   // Check if data was loaded
-   const totalItems = vidi.getTotalItems();
-   console.log(`Total items: ${totalItems}`);
-   ```
-
-2. **CORS errors**
-   ```javascript
-   // Check CORS configuration
-   const vidi = new VIDI({
-     dataSource: 'https://api.example.com/data',
-     enableCORS: true
-   });
-   
-   // Test CORS handling
-   vidi.fetchData('https://api.example.com/data').then(data => {
-     console.log('CORS data loaded:', data);
-   });
-   ```
-
-3. **Performance issues**
-   ```javascript
-   // Enable performance monitoring
-   vidi.setPerformanceMonitoring(true);
-   
-   // Check performance metrics
-   const metrics = vidi.getPerformanceMetrics();
-   console.log('Performance metrics:', metrics);
-   ```
-
-### Debugging Commands
-
-```javascript
-// Enable debug logging
-vidi.setDebugMode(true);
-
-// Check data logs
-const logs = vidi.getDataLogs();
-console.log(logs);
-
-// Monitor system resources
-// Use browser dev tools to monitor performance
-```
-
-## Conclusion
-
-VIDI provides a comprehensive data management and visualization solution that enables users to visualize data in an intuitive card-based format while providing advanced data security and management features. It offers rich integration capabilities with other Emperor42 projects and can be easily embedded in web applications.
-
-Key benefits:
-
-- **Data Visualization**: Card-based data visualization
-- **Data Management**: Comprehensive data storage and management
-- **Security Features**: Built-in security and authentication
-- **CORS Support**: Cross-origin resource sharing
-- **Pagination**: Automatic pagination for large datasets
-- **Integration**: Rich integration with VENI, VICI, and VINI
-- **Monitoring**: Comprehensive data monitoring and analytics
-- **Flexibility**: Flexible data management and visualization
-
-This data management system is production-ready and can be easily integrated into web applications with comprehensive data visualization and security features.
-
----
-
-*Document Version: 1.0*
-*Created: 2026-08-25*
-*Last Updated: 2026-08-25*
-*Status: Production Ready*
+The optional Go tests cover template persistence, route validation, malformed
+input, traversal rejection, method handling, and write-failure reporting.
 
 **License:** MIT License © Matthew Salvatore Giancola.

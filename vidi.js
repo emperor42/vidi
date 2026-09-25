@@ -19,16 +19,6 @@
 (function () {
   "use strict";
 
-  var ESC = {
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  };
-
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return ESC[c];
-    });
-  }
-
   function el(tag, attrs, children) {
     var n = document.createElement(tag);
     for (var k in attrs || {}) {
@@ -40,7 +30,6 @@
           continue; // never setAttribute(null) — that would set the attribute
         } else if (k === "class") n.className = v;
         else if (k === "text") n.textContent = v;
-        else if (k === "html") n.innerHTML = v; // only used internally with escaped/trusted content
         else n.setAttribute(k, v);
       }
     }
@@ -51,9 +40,9 @@
     return n;
   }
 
-  // Normalize a record into a flat object of {field: value} pairs. pod rows
-  // arrive as { id, fields: {…} }; other sources may send flat maps. Any
-  // nested container is flattened so cards can show everything.
+  // Normalize a record into a top-level {field: value} object. pod rows arrive
+  // as { id, fields: {…} }; other sources may send flat maps. Nested values
+  // are retained as values and are rendered with the same safe text path.
   function normalizeRow(rec) {
     var row = {};
     if (!rec) return row;
@@ -82,6 +71,14 @@
     });
   }
 
+  function appendTextWithBreaks(parent, value) {
+    var lines = String(value).split("\n");
+    lines.forEach(function (line, index) {
+      if (index > 0) parent.appendChild(el("br"));
+      parent.appendChild(document.createTextNode(line));
+    });
+  }
+
   class Vidi {
     /**
      * @param {Object} opts
@@ -92,6 +89,7 @@
      *   fields      optional array of field names to display (default: all but bookkeeping)
      *   titleField  optional field used as the card title (default: title if present)
      *   onRender    optional callback after each render (rows, container)
+     *   onError     optional callback when loading or rendering data fails
      */
     constructor(opts) {
       opts = opts || {};
@@ -103,6 +101,7 @@
       this.fields = opts.fields || null;
       this.titleField = opts.titleField || null;
       this.onRender = opts.onRender || null;
+      this.onError = opts.onError || null;
       this.container = document.querySelector(opts.container || "#vidi-cards-container");
       this.pagination = document.querySelector(opts.pagination || "#vidi-pagination");
       this.escaped = true; // always escape; kept as a flag for introspection
@@ -254,11 +253,17 @@
         if (s === "") return;
         dl.appendChild(el("dt", { class: "vidi-field-name" }, [prettyField(f)]));
         var dd = el("dd", { class: "vidi-field-value" });
-        if (f === "link" || (looksLikeURL(s) && fields.indexOf(f) === fields.length - 1)) {
-          dd.appendChild(el("a", { href: s, target: "_blank", rel: "noopener noreferrer", text: s }));
+        var url = safeURL(s);
+        // Only explicitly permitted schemes become links. In particular, a
+        // field named "link" must not turn javascript:, data:, or other
+        // attacker-controlled values into executable URLs.
+        var linkField = !!url && (f === "link" || fields.indexOf(f) === fields.length - 1);
+        if (linkField) {
+          dd.appendChild(el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: s }));
         } else {
-          // Safe: every dynamic value goes through esc() before innerHTML.
-          dd.innerHTML = esc(s).replace(/\n/g, "<br>");
+          // Use text nodes even for URL-shaped values. Unsafe values are
+          // deliberately rendered as text rather than copied into an href.
+          appendTextWithBreaks(dd, s);
         }
         dl.appendChild(dd);
       });
@@ -357,8 +362,23 @@
     return s;
   }
 
-  function looksLikeURL(s) {
-    return /^(https?|mailto|tel):\/?\/?/i.test(s);
+  var SAFE_URL_SCHEMES = {
+    http: true,
+    https: true,
+    mailto: true,
+    tel: true,
+  };
+
+  // Return a normalized, safe URL for an href, or null when the value is not
+  // an explicitly supported URL. Do not treat a relative URL as safe here:
+  // allowing a caller-controlled "link" field to become an executable URL is
+  // more dangerous than rendering it as ordinary text.
+  function safeURL(value) {
+    if (typeof value !== "string") return null;
+    var candidate = value.trim();
+    var match = /^([a-z][a-z0-9+.-]*):/i.exec(candidate);
+    if (!match || SAFE_URL_SCHEMES[match[1].toLowerCase()] !== true) return null;
+    return candidate;
   }
 
   // Auto-init readiness: the contract is `new Vidi({dataSource})`, so no
