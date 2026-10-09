@@ -10,8 +10,8 @@ The root of this component contains two separate things:
 - **`main.go`, `static/`, and `templates/`** are an optional Go template-editor
   demo. They are not required to use `vidi.js`.
 
-The archived material in [`legacy/`](legacy/) is retained for reference and is
-not part of the current build or API.
+Archived legacy material is not present in this checkout and is not part of the
+current build or API.
 
 ## Browser API
 
