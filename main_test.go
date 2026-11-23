@@ -1,137 +1,209 @@
 package main
 
 import (
-    "encoding/json"
-    "net/http"
-    "net/http/httptest"
-    "strings"
-    "testing"
-    "time"
+	"encoding/json"
+	"html/template"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
 )
 
-func TestRecordsHandlerGet(t *testing.T) {
-    req, err := http.NewRequest("GET", "/api/records", nil)
-    if err != nil {
-        t.Fatal(err)
-    }
-    
-    rr := httptest.NewRecorder()
-    handler := http.HandlerFunc(recordsHandler)
-    
-    handler.ServeHTTP(rr, req)
-    
-    if status := rr.Code; status != http.StatusOK {
-        t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusOK)
-    }
-    
-    var response map[string]interface{}
-    if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
-        t.Errorf("Error decoding response: %v", err)
-    }
-    
-    // The response structure is different - check for the correct fields
-    if records, ok := response["records"]; ok {
-        if recordSlice, ok := records.([]interface{}); ok {
-            if len(recordSlice) != 0 {
-                t.Errorf("Expected 0 records (empty cache), got %d", len(recordSlice))
-            }
-        } else {
-            t.Errorf("Expected 'records' field to be a slice")
-        }
-    } else {
-        t.Errorf("Expected 'records' field in response")
-    }
+func newTestHandler(t *testing.T) (*templateServer, http.Handler) {
+	t.Helper()
+	dataDir := filepath.Join(t.TempDir(), "templates")
+	server, err := newTemplateServer(dataDir, defaultIndexTemplate)
+	if err != nil {
+		t.Fatalf("newTemplateServer() error = %v", err)
+	}
+	return server, newHandler(server)
 }
 
-func TestRecordsHandlerPost(t *testing.T) {
-    newRecord := Record{
-        ID: "test-rec-123",
-        Title: "Test Record",
-        Content: "This is a test record",
-        CreatedAt: time.Now(),
-    }
-    
-    recordJSON, err := json.Marshal(newRecord)
-    if err != nil {
-        t.Fatal(err)
-    }
-    
-    req, err := http.NewRequest("POST", "/api/records", strings.NewReader(string(recordJSON)))
-    if err != nil {
-        t.Fatal(err)
-    }
-    req.Header.Set("Content-Type", "application/json")
-    
-    rr := httptest.NewRecorder()
-    handler := http.HandlerFunc(recordsHandler)
-    
-    handler.ServeHTTP(rr, req)
-    
-    if status := rr.Code; status != http.StatusCreated {
-        t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusCreated)
-    }
-    
-    var response Record
-    if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
-        t.Errorf("Error decoding response: %v", err)
-    }
-    
-    if response.Title != "Test Record" {
-        t.Errorf("Expected record title 'Test Record', got %v", response.Title)
-    }
+func TestValidTemplateName(t *testing.T) {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{name: "home", valid: true},
+		{name: "Home-page_1.0", valid: true},
+		{name: "", valid: false},
+		{name: ".", valid: false},
+		{name: "..", valid: false},
+		{name: "../outside", valid: false},
+		{name: `..\outside`, valid: false},
+		{name: "nested/name", valid: false},
+		{name: "name with spaces", valid: false},
+		{name: strings.Repeat("a", maxTemplateNameLength+1), valid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validTemplateName(tt.name); got != tt.valid {
+				t.Fatalf("validTemplateName(%q) = %v, want %v", tt.name, got, tt.valid)
+			}
+		})
+	}
 }
 
-func TestHealthHandler(t *testing.T) {
-    req, err := http.NewRequest("GET", "/health", nil)
-    if err != nil {
-        t.Fatal(err)
-    }
-    
-    rr := httptest.NewRecorder()
-    handler := http.HandlerFunc(healthHandler)
-    
-    handler.ServeHTTP(rr, req)
-    
-    if status := rr.Code; status != http.StatusOK {
-        t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusOK)
-    }
-    
-    var health map[string]interface{}
-    if err := json.NewDecoder(rr.Body).Decode(&health); err != nil {
-        t.Errorf("Error decoding response: %v", err)
-    }
-    
-    if health["service"] != "vidi" {
-        t.Errorf("Expected service 'vidi', got %v", health["service"])
-    }
-    
-    if health["status"] != "healthy" {
-        t.Errorf("Expected status 'healthy', got %v", health["status"])
-    }
+func TestAPIRequiresTokenWhenConfigured(t *testing.T) {
+	t.Setenv("VIDI_API_TOKEN", "test-token")
+	server, handler := newTestHandler(t)
+	body, err := json.Marshal(TemplateInfo{Name: "protected", HTML: "<p>no</p>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/templates", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated POST status = %d, want 401", rr.Code)
+	}
+	if _, err := os.Stat(filepath.Join(server.templatesDir, "protected.json")); !os.IsNotExist(err) {
+		t.Fatalf("unauthenticated request wrote a file: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/templates", strings.NewReader(string(body)))
+	req.Header.Set("X-Vidi-Token", "test-token")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("authenticated POST status = %d, want 201", rr.Code)
+	}
 }
 
-func TestCacheCleanup(t *testing.T) {
-    // Add a record with old timestamp
-    oldRecord := Record{
-        ID: "old-rec",
-        Title: "Old Record",
-        Content: "This record is old",
-        CreatedAt: time.Now().Add(-10 * time.Minute),
-    }
-    
-    cache.mu.Lock()
-    cache.data[oldRecord.ID] = oldRecord
-    cache.mu.Unlock()
-    
-    // Trigger cleanup
-    cleanCache()
-    
-    // Check if old record was removed
-    cache.mu.RLock()
-    _, exists := cache.data["old-rec"]
-    cache.mu.RUnlock()
-    
-    if exists {
-        t.Errorf("Old record should have been cleaned up by cache")
-    }
+func TestNonLoopbackListenRequiresToken(t *testing.T) {
+	t.Setenv("VIDI_API_TOKEN", "")
+	if err := validateListenSecurity("0.0.0.0:8084"); err == nil {
+		t.Fatal("non-loopback listener without token was accepted")
+	}
+	t.Setenv("VIDI_API_TOKEN", "test-token")
+	if err := validateListenSecurity("0.0.0.0:8084"); err != nil {
+		t.Fatalf("non-loopback listener with token rejected: %v", err)
+	}
+}
+
+func TestSaveAndServeTemplate(t *testing.T) {
+	server, handler := newTestHandler(t)
+	info := TemplateInfo{Name: "welcome", HTML: "<p>hello</p>"}
+	body, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/templates", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want %d: %s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	stored, err := os.ReadFile(filepath.Join(server.templatesDir, "welcome.json"))
+	if err != nil {
+		t.Fatalf("stored template: %v", err)
+	}
+	if string(stored) != string(body) {
+		t.Fatalf("stored template = %q, want %q", stored, body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/templates/welcome", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if rr.Body.String() != info.HTML {
+		t.Fatalf("GET body = %q, want %q", rr.Body.String(), info.HTML)
+	}
+}
+
+func TestTemplateNameCannotEscapeDataDirectory(t *testing.T) {
+	server, handler := newTestHandler(t)
+	parent := filepath.Dir(server.templatesDir)
+	outside := filepath.Join(parent, "outside.json")
+
+	for _, name := range []string{"../outside", `..\outside`, "nested/name"} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(TemplateInfo{Name: name, HTML: "<p>no</p>"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/templates", strings.NewReader(string(body)))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("POST status = %d, want %d", rr.Code, http.StatusBadRequest)
+			}
+		})
+	}
+
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside file exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestMalformedStoredTemplateReturnsServerError(t *testing.T) {
+	server, handler := newTestHandler(t)
+	path := filepath.Join(server.templatesDir, "broken.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/templates/broken", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("GET status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestTemplateWriteFailureIsReported(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("occupied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	index, err := template.ParseFiles(defaultIndexTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &templateServer{templatesDir: blocked, index: index}
+	handler := newHandler(server)
+
+	body, err := json.Marshal(TemplateInfo{Name: "unwritable", HTML: "<p>no</p>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/templates", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("POST status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestUnsupportedTemplateMethods(t *testing.T) {
+	_, handler := newTestHandler(t)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		allow  string
+	}{
+		{method: http.MethodPut, path: "/api/templates", allow: "GET, POST"},
+		{method: http.MethodPatch, path: "/api/templates/example", allow: "GET, DELETE"},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
+			}
+			if got := rr.Header().Get("Allow"); got != tc.allow {
+				t.Fatalf("Allow = %q, want %q", got, tc.allow)
+			}
+		})
+	}
 }

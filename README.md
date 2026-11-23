@@ -1,206 +1,63 @@
 # VIDI
 
-VIDI is a small, dependency-free browser library for rendering records from a JSON or XML endpoint as escaped cards, with pagination and CSV export.
+VIDI has two independent pieces:
 
-The root of this component contains two separate things:
+1. `vidi.js` — a dependency-free browser library that renders records from a JSON or XML endpoint as escaped, paginated cards with CSV export.
+2. `main.go` — an optional Go template editor demo with a small API.
 
-- **`vidi.js`** is the browser API. It does not need a Node.js runtime, a bundler, or a Go server.
-- **`main.go`, `static/`, and `templates/`** are an optional Go template-engine
+The browser library needs no server. The Go demo is a local editor for stored HTML templates, not a data-management platform.
 
-## Overview
+Loopback and container-publishing rules for all six demos: [`../docs/LOCAL-DEMOS.md`](../docs/LOCAL-DEMOS.md). Runnable scripts and a loopback-only Compose file: [`../examples`](../examples/README.md).
 
-`vidi` is a Go backend service that provides record rendering APIs, serving as the foundation for the VIDI browser library.
+## Browser library (`vidi.js`)
 
-## Features
+Construct with `new Vidi({ dataSource: "/api/pod/table/acme/items?format=json", pageSize: 12 })`. Exports `window.Vidi` and `window.vidi` (the same class), plus a CommonJS export for tests.
 
-- **Record Rendering**: API for rendering records from JSON/XML endpoints
-- **Pagination**: Built-in pagination support
-- **CSV Export**: Export records as CSV
-- **Health Monitoring**: Built-in health check endpoint
-- **Security First**: Implements security best practices
+- Accepts `{records:[...]}`, `{items:[...]}`, a single `{record:...}`, or a bare array; pod-style `{id, fields:{...}}` rows are flattened.
+- Parses XML of the form `<records><record id="..."><field name="...">value</field></record></records>`.
+- Renders every value with text nodes, never `innerHTML`; URLs are only linked when the scheme is `http`, `https`, `mailto`, or `tel`.
+- Provides a pager with a five-page window and an `Export CSV` button for all loaded rows.
+- Calls `onRender(rows, container)` and `onError(err)` callbacks when supplied.
 
-## API Endpoints
-
-### Record API
-- **GET /api/records** - List all records with optional filtering
-- **POST /api/records** - Create a new record
-
-### System Status
-- **GET /health** - Health check endpoint
-
-## Technology Stack
-
-- **Backend**: Go
-- **API**: RESTful JSON
-- **Security**: HTTP security headers, rate limiting, validation
-- **Deployment**: Docker ready
-
-## Running
-
-### Prerequisites
+## Go template editor demo
 
 ```bash
-go 1.21+
+go test ./...
+node --test vidi_test.js
+go run .                 # http://127.0.0.1:8084
 ```
 
-### Building and Running
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `VIDI_HOST` | `127.0.0.1` | Bind address. Non-loopback binds are refused without a token. |
+| `VIDI_PORT` | `8084` | Bind port. |
+| `VIDI_API_TOKEN` | empty | Bearer/`X-Vidi-Token` value for API routes. Static assets are exempt. |
 
-```bash
-# Build the application
-go build
+Routes:
 
-# Run the application
-./vidi
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /` | Template list UI. |
+| `GET /{name}` | Serve a stored template's HTML verbatim. |
+| `GET /api/templates` | List template names and bodies. |
+| `POST /api/templates` | Save `{name, html}` (1 MiB body cap). |
+| `GET /api/templates/{name}` | Read a template. |
+| `DELETE /api/templates/{name}` | Delete a template. |
+| `GET /static/` | UI assets. |
 
-# Or using Docker
-docker build -t vidi .
-docker run -p 8084:8084 vidi
-```
+Templates live as JSON files under `templates_data/` and are written atomically with mode `0600`. Names are restricted to a single conservative filename component, with a path check as defence in depth. The handler sends `nosniff`, frame-deny, and referrer headers, and uses constant-time token comparison.
 
-### Testing
+**Stored templates are executable HTML.** They are served as-is without sanitization, so a caller with write access can run script on this origin. Do not share the origin with sensitive applications.
 
-```bash
-# Run tests
-go test -v ./...
+`SECURITY.md` describes the actual implementation; the previous document listed features such as AES encryption, RBAC, MFA, SSO, audit logging, and DDoS protection that do not exist.
 
-# Run with coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
-```
+## Tests
 
-## Usage
+`go test ./...` and `node --test vidi_test.js` both pass. The JS suite covers escaping and URL-scheme handling.
 
-### Local Development
+## Remaining gaps
 
-```bash
-# Start the server
-./vidi
-
-# List all records
-curl http://localhost:8084/api/records
-
-# Create a new record
-curl -X POST -H "Content-Type: application/json" -d '{"title":"New Record","content":"Record content"}' http://localhost:8084/api/records
-
-# Search records
-curl "http://localhost:8084/api/records?title=search"
-
-# Check system health
-curl http://localhost:8084/health
-```
-
-### API Examples
-
-#### Get All Records
-```bash
-curl -X GET http://localhost:8084/api/records
-```
-
-#### Get Filtered Records
-```bash
-curl -X GET "http://localhost:8084/api/records?title=search"
-```
-
-#### Create New Record
-```bash
-curl -X POST -H "Content-Type: application/json" -d '{"title":"New Record","content":"Record content","id":"custom-id"}' http://localhost:8084/api/records
-```
-
-#### Health Check
-```bash
-curl -X GET http://localhost:8084/health
-```
-
-## Deployment
-
-### Docker Deployment
-
-```Dockerfile
-FROM golang:1.21-alpine
-
-WORKDIR /app
-
-COPY go.mod go.sum ./
-COPY . .
-
-RUN go build -o vidi main.go
-
-EXPOSE 8084
-
-CMD ["./vidi"]
-```
-
-### Kubernetes Deployment
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: vidi
-  labels:
-    app: vidi
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: vidi
-  template:
-    metadata:
-      labels:
-        app: vidi
-    spec:
-      containers:
-      - name: vidi
-        image: vidi:latest
-        ports:
-        - containerPort: 8084
-        env:
-        - name: NODE_ENV
-          value: "production"
-```
-
-## Development
-
-### Project Structure
-
-```
-.
-├── main.go          # Main application
-├── main_test.go     # Tests
-├── go.mod          # Module configuration
-└── README.md       # Documentation
-```
-
-### Features Implemented
-
-- **Record Rendering**: API for managing records with JSON/XML endpoints
-- **Pagination**: Built-in pagination support
-- **Caching**: Performance optimization with caching
-- **Security First**: Request validation and security
-- **API-First**: RESTful API design
-- **Developer Experience**: Comprehensive testing
-
-## License
-
-MIT License
-
-## Future Enhancements
-
-- [ ] Add record categorization
-- [ ] Implement CSV export functionality
-- [ ] Add real-time updates
-- [ ] Implement record attachments
-- [ ] Add user authentication
-- [ ] Implement batch operations
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement your changes
-4. Add tests
-5. Submit a pull request
-
-## Contact
-
-For questions or suggestions, please open an issue or contact the maintainer.
+- No accounts, per-user authorization, CSRF protection, rate limiting, or TLS.
+- The token is a single shared demo credential.
+- Pagination, XML parsing, and CSV export live in `vidi.js`, not in the Go API.
+- The stale prebuilt binary was removed; build from source with `go build .` (it is now gitignored).
